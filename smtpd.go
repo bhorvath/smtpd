@@ -17,6 +17,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,6 +28,8 @@ var (
 	rcptToRE   = regexp.MustCompile(`[Tt][Oo]:<(.+)>`)
 	mailFromRE = regexp.MustCompile(`[Ff][Rr][Oo][Mm]:<(.*)>(\s(.*))?`) // Delivery Status Notifications are sent with "MAIL FROM:<>"
 	mailSizeRE = regexp.MustCompile(`[Ss][Ii][Zz][Ee]=(\d+)`)
+	// ErrServerClosed is returned by the Server's methods after a call to Shutdown.
+	ErrServerClosed = errors.New("smtpd: Server closed")
 )
 
 // MailHandler function called upon successful receipt of an email.
@@ -91,6 +95,10 @@ type Server struct {
 	TLSConfig    *tls.Config
 	TLSListener  bool // Listen for incoming TLS connections only (not recommended as it may reduce compatibility). Ignored if TLS is not configured.
 	TLSRequired  bool // Require TLS for every command except NOOP, EHLO, STARTTLS, or QUIT as per RFC 3207. Ignored if TLS is not configured.
+	ln           net.Listener
+	inShutdown   int32 // accessed atomically (non-zero means we're in Shutdown)
+	mu           sync.Mutex
+	doneChan     chan struct{}
 }
 
 // ConfigureTLS creates a TLS configuration from certificate and key files.
@@ -168,11 +176,21 @@ func (srv *Server) ListenAndServe() error {
 }
 
 // Serve creates a new SMTP session after a network connection is established.
+// Serve always returns a non-nil error and closes ln.
 func (srv *Server) Serve(ln net.Listener) error {
+	srv.ln = ln
 	defer ln.Close()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			select {
+			case <-srv.getDoneChan():
+				return ErrServerClosed
+			default:
+			}
+			if srv.shuttingDown() {
+				return ErrServerClosed
+			}
 			if netErr, ok := err.(net.Error); ok && netErr.Temporary() {
 				continue
 			}
@@ -180,6 +198,44 @@ func (srv *Server) Serve(ln net.Listener) error {
 		}
 		session := srv.newSession(conn)
 		go session.serve()
+	}
+}
+
+// Shutdown gracefully shuts down the server.
+func (srv *Server) Shutdown() error {
+	srv.mu.Lock()
+	srv.closeDoneChanLocked()
+	srv.mu.Unlock()
+	srv.ln.Close()
+	return nil
+}
+
+func (srv *Server) shuttingDown() bool {
+	return atomic.LoadInt32(&srv.inShutdown) != 0
+}
+
+func (srv *Server) getDoneChan() <-chan struct{} {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	return srv.getDoneChanLocked()
+}
+
+func (srv *Server) getDoneChanLocked() chan struct{} {
+	if srv.doneChan == nil {
+		srv.doneChan = make(chan struct{})
+	}
+	return srv.doneChan
+}
+
+func (srv *Server) closeDoneChanLocked() {
+	ch := srv.getDoneChanLocked()
+	select {
+	case <-ch:
+		// Already closed. Don't close again.
+	default:
+		// Safe to close here. We're the only closer, guarded
+		// by s.mu.
+		close(ch)
 	}
 }
 
