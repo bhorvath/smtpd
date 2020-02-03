@@ -28,8 +28,8 @@ var (
 	mailSizeRE = regexp.MustCompile(`[Ss][Ii][Zz][Ee]=(\d+)`)
 )
 
-// Handler function called upon successful receipt of an email.
-type Handler func(remoteAddr net.Addr, from string, to []string, data []byte)
+// MailHandler function called upon successful receipt of an email.
+type MailHandler func(remoteAddr net.Addr, from string, to []string, data []byte)
 
 // HandlerRcpt function called on RCPT. Return accept status.
 type HandlerRcpt func(remoteAddr net.Addr, from string, to string) bool
@@ -40,16 +40,16 @@ type AuthHandler func(remoteAddr net.Addr, mechanism string, username []byte, pa
 // ListenAndServe listens on the TCP network address addr
 // and then calls Serve with handler to handle requests
 // on incoming connections.
-func ListenAndServe(addr string, handler Handler, appname string, hostname string) error {
-	srv := &Server{Addr: addr, Handler: handler, Appname: appname, Hostname: hostname}
+func ListenAndServe(addr string, handler MailHandler, appname string, hostname string) error {
+	srv := &Server{Addr: addr, MailHandler: handler, Appname: appname, Hostname: hostname}
 	return srv.ListenAndServe()
 }
 
 // ListenAndServeTLS listens on the TCP network address addr
 // and then calls Serve with handler to handle requests
 // on incoming connections. Connections may be upgraded to TLS if the client requests it.
-func ListenAndServeTLS(addr string, certFile string, keyFile string, handler Handler, appname string, hostname string) error {
-	srv := &Server{Addr: addr, Handler: handler, Appname: appname, Hostname: hostname}
+func ListenAndServeTLS(addr string, certFile string, keyFile string, handler MailHandler, appname string, hostname string) error {
+	srv := &Server{Addr: addr, MailHandler: handler, Appname: appname, Hostname: hostname}
 	err := srv.ConfigureTLS(certFile, keyFile)
 	if err != nil {
 		return err
@@ -81,7 +81,7 @@ type Server struct {
 	AuthHandler  AuthHandler
 	AuthMechs    map[string]bool // Override list of allowed authentication mechanisms. Currently supported: LOGIN, PLAIN, CRAM-MD5. Enabling LOGIN and PLAIN will reduce RFC 4954 compliance.
 	AuthRequired bool            // Require authentication for every command except AUTH, EHLO, HELO, NOOP, RSET or QUIT as per RFC 4954. Ignored if AuthHandler is not configured.
-	Handler      Handler
+	MailHandler  MailHandler
 	HandlerRcpt  HandlerRcpt
 	Hostname     string
 	LogRead      LogFunc
@@ -382,8 +382,8 @@ loop:
 			s.writef("250 2.0.0 Ok: queued")
 
 			// Pass mail on to handler.
-			if s.srv.Handler != nil {
-				go s.srv.Handler(s.conn.RemoteAddr(), from, to, buffer.Bytes())
+			if s.srv.MailHandler != nil {
+				s.srv.MailHandler(s.conn.RemoteAddr(), from, to, buffer.Bytes())
 			}
 
 			// Reset for next mail.
