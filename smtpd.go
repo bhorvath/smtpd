@@ -31,8 +31,8 @@ var (
 // MailHandler function called upon successful receipt of an email.
 type MailHandler func(remoteAddr net.Addr, from string, to []string, data []byte) error
 
-// HandlerRcpt function called on RCPT. Return accept status.
-type HandlerRcpt func(remoteAddr net.Addr, from string, to string) bool
+// RcptHandler function called on RCPT. Return accept status.
+type RcptHandler func(remoteAddr net.Addr, from string, to string) bool
 
 // AuthHandler function called when a login attempt is performed. Returns true if credentials are correct.
 type AuthHandler func(remoteAddr net.Addr, mechanism string, username []byte, password []byte, shared []byte) (bool, error)
@@ -82,7 +82,7 @@ type Server struct {
 	AuthMechs    map[string]bool // Override list of allowed authentication mechanisms. Currently supported: LOGIN, PLAIN, CRAM-MD5. Enabling LOGIN and PLAIN will reduce RFC 4954 compliance.
 	AuthRequired bool            // Require authentication for every command except AUTH, EHLO, HELO, NOOP, RSET or QUIT as per RFC 4954. Ignored if AuthHandler is not configured.
 	MailHandler  MailHandler
-	HandlerRcpt  HandlerRcpt
+	RcptHandler  RcptHandler
 	Hostname     string
 	LogRead      LogFunc
 	LogWrite     LogFunc
@@ -327,8 +327,8 @@ loop:
 					s.writef("452 4.5.3 Too many recipients")
 				} else {
 					accept := true
-					if s.srv.HandlerRcpt != nil {
-						accept = s.srv.HandlerRcpt(s.conn.RemoteAddr(), from, match[1])
+					if s.srv.RcptHandler != nil {
+						accept = s.srv.RcptHandler(s.conn.RemoteAddr(), from, match[1])
 					}
 					if accept {
 						to = append(to, match[1])
